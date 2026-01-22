@@ -72,4 +72,4 @@ __pycache__/
 
 # RL training logs and checkpoints
 rl-training-genesis/__pycache__/
-rl-training-genesis/logs/
+rl-training-genesis/logs/*
