@@ -52,9 +52,9 @@ class Go2Env:
 
         self.scene.add_entity(gs.morphs.URDF(file="urdf/plane/plane.urdf", fixed=True))
 
-        # Add robot - URDF file is in ros2_ws/src/simulation/models/
+        # Add robot - URDF file is in rl-training-genesis/models/g1_12dof.urdf
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        urdf_path = os.path.join(project_root, "ros2_ws", "src", "simulation", "models", "g1_12dof.urdf")
+        urdf_path = os.path.join(project_root, "rl-training-genesis", "models", "g1_12dof.urdf")
         
         self.robot = self.scene.add_entity(
             gs.morphs.URDF(

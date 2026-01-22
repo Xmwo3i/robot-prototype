@@ -29,8 +29,8 @@ def main():
 
     gs.init(backend=gs.cpu)
 
-    log_dir = f"logs/{args.exp_name}"
-    env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(open(f"logs/{args.exp_name}/cfgs.pkl", "rb"))
+    log_dir = f"rl-training-genesis/logs/{args.exp_name}"
+    env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(open(f"rl-training-genesis/logs/{args.exp_name}/cfgs.pkl", "rb"))
     reward_cfg["reward_scales"] = {}
 
     env = Go2Env(
@@ -50,7 +50,7 @@ def main():
     obs, _ = env.reset()
     with torch.no_grad():
         while True:
-            actions = policy(obs) # these output actions need to be transmitted to the embedded world using CAN, there are multiple action values in a list, or a BUS hence CANBUS
+            actions = policy(obs)
             obs, rews, dones, infos = env.step(actions)
 
 

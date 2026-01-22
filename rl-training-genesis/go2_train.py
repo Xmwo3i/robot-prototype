@@ -68,18 +68,18 @@ def get_cfgs():
         "num_actions": 17, 
         "default_joint_angles": { 
             # --- LEGS ---
-            "left_hip_pitch_joint": 0.4,       
+            "left_hip_pitch_joint": 0.0,       
             "left_hip_roll_joint": 0.0,
             "left_hip_yaw_joint": 0.0,
-            "left_knee_joint": -0.8,             
-            "left_ankle_pitch_joint": -0.4,     
+            "left_knee_joint": 0.0,             
+            "left_ankle_pitch_joint": 0.0,     
             "left_ankle_roll_joint": 0.0,
             
-            "right_hip_pitch_joint": 0.4,
+            "right_hip_pitch_joint": 0.0,
             "right_hip_roll_joint": 0.0,
             "right_hip_yaw_joint": 0.0,
-            "right_knee_joint": -0.8,            
-            "right_ankle_pitch_joint": -0.4,
+            "right_knee_joint": 0.0,            
+            "right_ankle_pitch_joint": 0.0,
             "right_ankle_roll_joint": 0.0,
             
             # --- ARMS ---
@@ -112,9 +112,9 @@ def get_cfgs():
         ],
         "kp": 100.0,      
         "kd": 10.0,       # Increased damping
-        "termination_if_roll_greater_than": 30,
-        "termination_if_pitch_greater_than": 30,
-        "base_init_pos": [0.0, 0.0, 0.72],    
+        "termination_if_roll_greater_than": 60,
+        "termination_if_pitch_greater_than": 60,
+        "base_init_pos": [0.0, 0.0, 1.2],    
         "base_init_quat": [1.0, 0.0, 0.0, 0.0],
         "episode_length_s": 20.0,
         "resampling_time_s": 4.0,
@@ -142,9 +142,9 @@ def get_cfgs():
             "tracking_ang_vel": 0.5,
             "lin_vel_z": -2.0,               
             "base_height": -3.0,             
-            "action_rate": -0.001,           
+            "action_rate": -0.005,           
             "similar_to_default": -0.02,     
-            "orientation": -2.0,             
+            "orientation": -4.0,             
         },
     }
     
@@ -159,7 +159,7 @@ def get_cfgs():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", "--exp_name", type=str, default="go2-oneleg")
+    parser.add_argument("-e", "--exp_name", type=str, default="g1_12dof")
     parser.add_argument("-B", "--num_envs", type=int, default=4096)
     parser.add_argument("--max_iterations", type=int, default=101)
     parser.add_argument("--backend", type=str, choices=["cpu", "gpu"], default="cpu")
@@ -169,7 +169,7 @@ def main():
     backend = gs.gpu if args.backend == "gpu" else gs.cpu
     gs.init(backend=backend)
 
-    log_dir = f"logs/{args.exp_name}"
+    log_dir = f"rl-training-genesis/logs/{args.exp_name}"
     env_cfg, obs_cfg, reward_cfg, command_cfg = get_cfgs()
     train_cfg = get_train_cfg(args.exp_name, args.max_iterations)
 
@@ -209,5 +209,7 @@ if __name__ == "__main__":
 
 """
 # training
-python examples/locomotion/go2_train.py
+python rl-training-genesis/go2_train.py --backend gpu -v
+python rl-training-genesis/go2_train.py --backend gpu
+python rl-training-genesis/go2_train.py
 """
