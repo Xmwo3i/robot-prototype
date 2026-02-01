@@ -64,6 +64,22 @@ class Go2Env:
             ),
         )
 
+        self.feet = ["left_ankle_roll_link", "right_ankle_roll_link"]
+        self.feet_air_time = torch.zeros((self.num_envs, 2), device=self.device)
+        self.feet_contact_time = torch.zeros((self.num_envs, 2), device=self.device)
+
+        self.foot_sensors = []
+        for name in self.feet:
+            sensor = self.scene.add_sensor(
+                gs.sensors.Contact(
+                    entity_idx=self.robot.idx,
+                    link_idx_local=self.robot.get_link(name).idx_local,
+                    draw_debug=False,
+                )
+            )
+            self.foot_sensors.append(sensor)
+
+
         # build
         self.scene.build(n_envs=num_envs)
 
@@ -90,28 +106,17 @@ class Go2Env:
             dtype=gs.tc_float, device=gs.device,
         )
         self.init_qpos = torch.concatenate((self.init_base_pos, self.init_base_quat, self.init_dof_pos))
-        self.init_projected_gravity = transform_by_quat(torch.tensor([0.0, 0.0, -1.0], dtype=gs.tc_float, device=gs.device), self.inv_base_init_quat)
-        
-        self.robot.set_qpos(self.init_qpos, zero_velocity=True)
-        
-        print("Settling robot...")
-        for _ in range(50):
-            self.robot.control_dofs_position(
-                self.init_dof_pos[self.actions_dof_idx], 
-                self.motors_dof_idx
-            )
-            self.scene.step()
+        self.init_projected_gravity = transform_by_quat(self.global_gravity, self.inv_base_init_quat)
 
         self.base_lin_vel = torch.empty((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
         self.base_ang_vel = torch.empty((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
-
+        
         self.projected_gravity = torch.empty((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
         self.obs_buf = torch.empty((self.num_envs, self.num_obs), dtype=gs.tc_float, device=gs.device)
         self.rew_buf = torch.empty((self.num_envs,), dtype=gs.tc_float, device=gs.device)
         self.reset_buf = torch.ones((self.num_envs,), dtype=gs.tc_bool, device=gs.device)
         self.episode_length_buf = torch.empty((self.num_envs,), dtype=gs.tc_int, device=gs.device)
         self.commands = torch.empty((self.num_envs, self.num_commands), dtype=gs.tc_float, device=gs.device)
-        
         self.commands_scale = torch.tensor(
             [self.obs_scales["lin_vel"], self.obs_scales["lin_vel"], self.obs_scales["ang_vel"]],
             device=gs.device, dtype=gs.tc_float,
@@ -169,6 +174,20 @@ class Go2Env:
         self.base_pos = self.robot.get_pos()
         self.base_quat = self.robot.get_quat()
         
+        contacts = torch.stack(
+            [(sensor.read()[0] == True).int() for sensor in self.foot_sensors],
+            dim=1
+        )  # (num_envs, 2)
+        
+        # contact → increment contact time, reset air time
+        self.feet_contact_time += contacts * self.dt
+        self.feet_air_time *= contacts.logical_not()
+
+        # air → increment air time, reset contact time
+        self.feet_air_time += (~contacts) * self.dt
+        self.feet_contact_time *= contacts
+
+        
         # Camera tracking logic
         if hasattr(self.scene, 'viewer') and self.scene.viewer is not None and self.num_envs > 0:
             try:
@@ -193,6 +212,7 @@ class Go2Env:
             rew = reward_func() * self.reward_scales[name]
             self.rew_buf += rew
             self.episode_sums[name] += rew
+            print(f"Reward {name}: {rew.mean().item():.4f}")
 
         # resample commands
         self._resample_commands(self.episode_length_buf % int(self.env_cfg["resampling_time_s"] / self.dt) == 0)
@@ -254,15 +274,16 @@ class Go2Env:
         self._resample_commands(envs_idx)
 
     def _update_observation(self):
-        self.obs_buf = torch.concatenate(
-            (
+        self.obs_buf = torch.cat(
+            [
+                self.base_lin_vel * self.obs_scales["lin_vel"],
                 self.base_ang_vel * self.obs_scales["ang_vel"],
                 self.projected_gravity,
                 self.commands * self.commands_scale,
                 (self.dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],
                 self.dof_vel * self.obs_scales["dof_vel"],
                 self.actions,
-            ),
+            ],
             dim=-1,
         )
 
@@ -272,6 +293,18 @@ class Go2Env:
         return self.obs_buf, None
 
     def get_observations(self):
+        self.obs_buf = torch.cat(
+            [
+                self.base_lin_vel * self.obs_scales["lin_vel"],
+                self.base_ang_vel * self.obs_scales["ang_vel"],
+                self.projected_gravity,
+                self.commands * self.commands_scale,
+                (self.dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],
+                self.dof_vel * self.obs_scales["dof_vel"],
+                self.actions,
+            ],
+            dim=-1,
+        )
         self.extras["observations"]["critic"] = self.obs_buf
         return self.obs_buf, self.extras
     
@@ -282,7 +315,12 @@ class Go2Env:
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-        return torch.exp(-lin_vel_error / self.reward_cfg["tracking_sigma"])
+        return torch.exp(-lin_vel_error / self.reward_cfg["tracking_sigma"]) 
+    
+    def _reward_tracking_lin_pos(self):
+        # Tracking of linear position commands (x axes)
+        lin_pos_error = torch.sum(torch.square(self.commands[:, 3] - self.base_pos[:, 0]))
+        return torch.exp(-lin_pos_error / self.reward_cfg["tracking_sigma"])
 
     def _reward_tracking_ang_vel(self):
         # Tracking of angular velocity commands (yaw)
@@ -303,8 +341,64 @@ class Go2Env:
 
     def _reward_base_height(self):
         # Penalize base height away from target
-        return torch.square(self.base_pos[:, 2] - self.reward_cfg["base_height_target"])
+        print("Base height:", self.base_pos[:, 2])
+        return torch.abs(self.base_pos[:, 2] - self.reward_cfg["base_height_target"])
     
+    def _reward_feet_touch_ground(self):
+        # Penalize low ankle joint velocities
+        left_ankle_pitch_quat = self.robot.get_link("left_ankle_pitch_link").get_quat()
+        left_ankle_roll_quat = self.robot.get_link("left_ankle_roll_link").get_quat()
+        right_ankle_pitch_quat = self.robot.get_link("right_ankle_pitch_link").get_quat()
+        right_ankle_roll_quat = self.robot.get_link("right_ankle_roll_link").get_quat()
+
+        left_ankle_offset = torch.square((left_ankle_pitch_quat)).sum(dim=1) + torch.square((left_ankle_roll_quat)).sum(dim=1) 
+        right_ankle_offset = torch.square((right_ankle_pitch_quat)).sum(dim=1) + torch.square((right_ankle_roll_quat)).sum(dim=1)
+        return left_ankle_offset + right_ankle_offset
+    
+    def _reward_foot_clearance(self):
+        left_z = self.robot.get_link("left_ankle_roll_link").get_pos()[:, 2]
+        right_z = self.robot.get_link("right_ankle_roll_link").get_pos()[:, 2]
+        print("foot height left: ", left_z, "right: ", right_z)
+        clearance = torch.relu(left_z - 0.05) + torch.relu(right_z - 0.05)
+        return clearance
+    
+    def _reward_feet_air_time(self):
+        # contacts: (num_envs, 2)
+        contacts = self.feet_contact_time > 0.0
+
+        # exactly one foot touching
+        single_stance = contacts.sum(dim=1) == 1
+
+        # time in current mode
+        in_mode_time = torch.where(
+            contacts,
+            self.feet_contact_time,
+            self.feet_air_time,
+        )
+
+        # take min across feet (Isaac-style)
+        reward = torch.min(
+            torch.where(single_stance.unsqueeze(1), in_mode_time, 0.0),
+            dim=1
+        )[0]
+
+        # clamp
+        reward = torch.clamp(reward, max=0.6)
+
+        # no reward for tiny commands
+        moving = torch.norm(self.commands[:, :2], dim=1) > 0.1
+        reward *= moving
+
+        return reward * self.episode_length_buf.float() / self.max_episode_length
+    
+    def _reward_knee_bend(self):
+        # Reward for bending knees (to encourage leg lift)
+        left_knee_angle = self.dof_pos[:, self.env_cfg["joint_names"].index("left_knee_joint")]
+        right_knee_angle = self.dof_pos[:, self.env_cfg["joint_names"].index("right_knee_joint")]
+        knee_bend_reward = torch.sin(left_knee_angle) ** 2 + torch.sin(right_knee_angle) ** 2
+        return knee_bend_reward
+
+
     def _reward_orientation(self):
         # Reward for maintaining upright orientation (penalize roll and pitch)
         roll_pitch_penalty = torch.square(self.base_euler[:, 0]) + torch.square(self.base_euler[:, 1])
