@@ -106,17 +106,19 @@ class Go2Env:
             dtype=gs.tc_float, device=gs.device,
         )
         self.init_qpos = torch.concatenate((self.init_base_pos, self.init_base_quat, self.init_dof_pos))
-        self.init_projected_gravity = transform_by_quat(self.global_gravity, self.inv_base_init_quat)
+        # Expand inv_base_init_quat to match batch dimension for transform
+        inv_base_init_quat_batched = self.inv_base_init_quat.unsqueeze(0).expand(self.num_envs, -1)
+        self.init_projected_gravity = transform_by_quat(self.global_gravity, inv_base_init_quat_batched)
 
-        self.base_lin_vel = torch.empty((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
-        self.base_ang_vel = torch.empty((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
+        self.base_lin_vel = torch.zeros((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
+        self.base_ang_vel = torch.zeros((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
         
-        self.projected_gravity = torch.empty((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
-        self.obs_buf = torch.empty((self.num_envs, self.num_obs), dtype=gs.tc_float, device=gs.device)
-        self.rew_buf = torch.empty((self.num_envs,), dtype=gs.tc_float, device=gs.device)
+        self.projected_gravity = torch.zeros((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
+        self.obs_buf = torch.zeros((self.num_envs, self.num_obs), dtype=gs.tc_float, device=gs.device)
+        self.rew_buf = torch.zeros((self.num_envs,), dtype=gs.tc_float, device=gs.device)
         self.reset_buf = torch.ones((self.num_envs,), dtype=gs.tc_bool, device=gs.device)
-        self.episode_length_buf = torch.empty((self.num_envs,), dtype=gs.tc_int, device=gs.device)
-        self.commands = torch.empty((self.num_envs, self.num_commands), dtype=gs.tc_float, device=gs.device)
+        self.episode_length_buf = torch.zeros((self.num_envs,), dtype=gs.tc_int, device=gs.device)
+        self.commands = torch.zeros((self.num_envs, self.num_commands), dtype=gs.tc_float, device=gs.device)
         self.commands_scale = torch.tensor(
             [self.obs_scales["lin_vel"], self.obs_scales["lin_vel"], self.obs_scales["ang_vel"]],
             device=gs.device, dtype=gs.tc_float,
@@ -131,11 +133,11 @@ class Go2Env:
         ]
         self.actions = torch.zeros((self.num_envs, self.num_actions), dtype=gs.tc_float, device=gs.device)
         self.last_actions = torch.zeros_like(self.actions)
-        self.dof_pos = torch.empty_like(self.actions)
-        self.dof_vel = torch.empty_like(self.actions)
+        self.dof_pos = torch.zeros_like(self.actions)
+        self.dof_vel = torch.zeros_like(self.actions)
         self.last_dof_vel = torch.zeros_like(self.actions)
-        self.base_pos = torch.empty((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
-        self.base_quat = torch.empty((self.num_envs, 4), dtype=gs.tc_float, device=gs.device)
+        self.base_pos = torch.zeros((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
+        self.base_quat = torch.zeros((self.num_envs, 4), dtype=gs.tc_float, device=gs.device)
         self.default_dof_pos = torch.tensor(
             [self.env_cfg["default_joint_angles"][name] for name in self.env_cfg["joint_names"]],
             dtype=gs.tc_float, device=gs.device,
@@ -148,6 +150,19 @@ class Go2Env:
             self.reward_scales[name] *= self.dt
             self.reward_functions[name] = getattr(self, "_reward_" + name)
             self.episode_sums[name] = torch.zeros((self.num_envs,), dtype=gs.tc_float, device=gs.device)
+        self._check_nan_initialization()
+
+    def _check_nan_initialization(self):
+        """Check for NaN values in initialized buffers"""
+        buffers = [
+            self.base_lin_vel, self.base_ang_vel, self.obs_buf, 
+            self.rew_buf, self.commands, self.actions, self.dof_pos, self.dof_vel
+        ]
+        print("Checking for NaN values in initialized buffers")
+        for i, buf in enumerate(buffers):
+            if torch.isnan(buf).any():
+                print(f"WARNING: Buffer {i} contains NaN values after initialization")
+                buf.copy_(torch.nan_to_num(buf, nan=0.0))
 
     def _resample_commands(self, envs_idx):
         commands = gs_rand(*self.commands_limits, (self.num_envs,))
@@ -212,7 +227,6 @@ class Go2Env:
             rew = reward_func() * self.reward_scales[name]
             self.rew_buf += rew
             self.episode_sums[name] += rew
-            print(f"Reward {name}: {rew.mean().item():.4f}")
 
         # resample commands
         self._resample_commands(self.episode_length_buf % int(self.env_cfg["resampling_time_s"] / self.dt) == 0)
@@ -245,10 +259,11 @@ class Go2Env:
 
         # reset buffers
         if envs_idx is None:
-            self.base_pos.copy_(self.init_base_pos)
-            self.base_quat.copy_(self.init_base_quat)
-            self.projected_gravity.copy_(self.init_projected_gravity)
-            self.dof_pos.copy_(self.init_dof_pos)
+            # Full reset - broadcast init values to all envs
+            self.base_pos[:] = self.init_base_pos.unsqueeze(0)
+            self.base_quat[:] = self.init_base_quat.unsqueeze(0)
+            self.projected_gravity[:] = self.init_projected_gravity
+            self.dof_pos[:] = self.init_dof_pos.unsqueeze(0)
             self.base_lin_vel.zero_()
             self.base_ang_vel.zero_()
             self.dof_vel.zero_()
@@ -258,10 +273,16 @@ class Go2Env:
             self.episode_length_buf.zero_()
             self.reset_buf.fill_(True)
         else:
-            torch.where(envs_idx[:, None], self.init_base_pos, self.base_pos, out=self.base_pos)
-            torch.where(envs_idx[:, None], self.init_base_quat, self.base_quat, out=self.base_quat)
-            torch.where(envs_idx[:, None], self.init_projected_gravity, self.projected_gravity, out=self.projected_gravity)
-            torch.where(envs_idx[:, None], self.init_dof_pos, self.dof_pos, out=self.dof_pos)
+            # Selective reset using boolean mask
+            # Expand init tensors to batch shape for torch.where
+            init_base_pos_batch = self.init_base_pos.unsqueeze(0).expand(self.num_envs, -1)
+            init_base_quat_batch = self.init_base_quat.unsqueeze(0).expand(self.num_envs, -1)
+            init_dof_pos_batch = self.init_dof_pos.unsqueeze(0).expand(self.num_envs, -1)
+            
+            self.base_pos = torch.where(envs_idx[:, None], init_base_pos_batch, self.base_pos)
+            self.base_quat = torch.where(envs_idx[:, None], init_base_quat_batch, self.base_quat)
+            self.projected_gravity = torch.where(envs_idx[:, None], self.init_projected_gravity, self.projected_gravity)
+            self.dof_pos = torch.where(envs_idx[:, None], init_dof_pos_batch, self.dof_pos)
             self.base_lin_vel.masked_fill_(envs_idx[:, None], 0.0)
             self.base_ang_vel.masked_fill_(envs_idx[:, None], 0.0)
             self.dof_vel.masked_fill_(envs_idx[:, None], 0.0)
@@ -274,18 +295,28 @@ class Go2Env:
         self._resample_commands(envs_idx)
 
     def _update_observation(self):
+        # Clip observations to prevent extreme values
+        base_lin_vel = torch.clamp(self.base_lin_vel, -10.0, 10.0)
+        base_ang_vel = torch.clamp(self.base_ang_vel, -10.0, 10.0)
+        projected_gravity = torch.clamp(self.projected_gravity, -1.0, 1.0)
+        dof_pos = torch.clamp(self.dof_pos, -3.14, 3.14)
+        dof_vel = torch.clamp(self.dof_vel, -100.0, 100.0)
+        
         self.obs_buf = torch.cat(
             [
-                self.base_lin_vel * self.obs_scales["lin_vel"],
-                self.base_ang_vel * self.obs_scales["ang_vel"],
-                self.projected_gravity,
+                base_lin_vel * self.obs_scales["lin_vel"],
+                base_ang_vel * self.obs_scales["ang_vel"],
+                projected_gravity,
                 self.commands * self.commands_scale,
-                (self.dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],
-                self.dof_vel * self.obs_scales["dof_vel"],
+                (dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],
+                dof_vel * self.obs_scales["dof_vel"],
                 self.actions,
             ],
             dim=-1,
         )
+        
+        # Final safety check
+        self.obs_buf = torch.nan_to_num(self.obs_buf, nan=0.0)
 
     def reset(self):
         self._reset_idx()
@@ -314,7 +345,9 @@ class Go2Env:
     # REWARDS
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
-        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
+        commands_xy = torch.nan_to_num(self.commands[:, :2], nan=0.0)
+        lin_vel_xy = torch.nan_to_num(self.base_lin_vel[:, :2], nan=0.0)
+        lin_vel_error = torch.sum(torch.square(commands_xy - lin_vel_xy), dim=1)
         return torch.exp(-lin_vel_error / self.reward_cfg["tracking_sigma"]) 
     
     def _reward_tracking_lin_pos(self):
@@ -341,7 +374,6 @@ class Go2Env:
 
     def _reward_base_height(self):
         # Penalize base height away from target
-        print("Base height:", self.base_pos[:, 2])
         return torch.abs(self.base_pos[:, 2] - self.reward_cfg["base_height_target"])
     
     def _reward_feet_touch_ground(self):
@@ -358,7 +390,6 @@ class Go2Env:
     def _reward_foot_clearance(self):
         left_z = self.robot.get_link("left_ankle_roll_link").get_pos()[:, 2]
         right_z = self.robot.get_link("right_ankle_roll_link").get_pos()[:, 2]
-        print("foot height left: ", left_z, "right: ", right_z)
         clearance = torch.relu(left_z - 0.05) + torch.relu(right_z - 0.05)
         return clearance
     
@@ -389,7 +420,7 @@ class Go2Env:
         moving = torch.norm(self.commands[:, :2], dim=1) > 0.1
         reward *= moving
 
-        return reward * self.episode_length_buf.float() / self.max_episode_length
+        return reward
     
     def _reward_knee_bend(self):
         # Reward for bending knees (to encourage leg lift)
@@ -401,8 +432,15 @@ class Go2Env:
 
     def _reward_orientation(self):
         # Reward for maintaining upright orientation (penalize roll and pitch)
-        roll_pitch_penalty = torch.square(self.base_euler[:, 0]) + torch.square(self.base_euler[:, 1])
+        # Convert degrees to radians before squaring to get reasonable scale
+        roll_rad = self.base_euler[:, 0] * (3.14159 / 180.0)
+        pitch_rad = self.base_euler[:, 1] * (3.14159 / 180.0)
+        roll_pitch_penalty = torch.square(roll_rad) + torch.square(pitch_rad)
         return roll_pitch_penalty
+    
+    def _reward_alive(self):
+        # Reward for staying alive/upright - encourages survival
+        return torch.ones(self.num_envs, device=self.device)
 
     def _reward_standing(self):
         # Reward for standing still
