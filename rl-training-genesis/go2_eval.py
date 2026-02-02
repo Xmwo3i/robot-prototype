@@ -23,11 +23,13 @@ from go2_env import Go2Env
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", "--exp_name", type=str, default="go2-walking")
+    parser.add_argument("-e", "--exp_name", type=str, default="g1_12dof")
+    parser.add_argument("--backend", type=str, choices=["cpu", "gpu"], default="gpu")
     parser.add_argument("--ckpt", type=int, default=100)
     args = parser.parse_args()
 
-    gs.init(backend=gs.cpu)
+    backend = gs.gpu if args.backend == "gpu" else gs.cpu
+    gs.init(backend=backend)
 
     log_dir = f"rl-training-genesis/logs/{args.exp_name}"
     env_cfg, obs_cfg, reward_cfg, command_cfg, train_cfg = pickle.load(open(f"rl-training-genesis/logs/{args.exp_name}/cfgs.pkl", "rb"))
@@ -59,5 +61,5 @@ if __name__ == "__main__":
 
 """
 # evaluation
-python go2_eval.py
+python rl-training-genesis/go2_eval.py --ckpt 1000
 """
