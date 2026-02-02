@@ -73,3 +73,9 @@ __pycache__/
 # RL training logs and checkpoints
 rl-training-genesis/__pycache__/
 rl-training-genesis/logs/*
+
+# Python virtual environment
+vla_env/
+
+# Training outputs
+outputs/
