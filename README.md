@@ -1,6 +1,6 @@
 # Humanoid One-Leg Robot - Project Structure
 
-This repository contains code, configurations, and documentation for a humanoid one-leg robot project spanning reinforcement learning, ROS2 systems, embedded firmware, and computer vision.
+This repository contains code, configurations, and documentation for the McMaster Humanoid club's research spanning reinforcement learning, ROS2 systems, embedded firmware, and computer vision.
 
 ## Directory Overview
 
