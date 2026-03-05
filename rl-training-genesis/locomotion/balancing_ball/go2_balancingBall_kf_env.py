@@ -40,7 +40,6 @@ class BallKalmanFilter:
         self.P[env_ids] = torch.eye(4, device=self.device) * 0.1
 
     def predict(self):
-        """Prediction step."""
         # x = F x
         self.x = torch.bmm(self.F, self.x)
         # P = F P Fᵀ + Q
@@ -48,10 +47,6 @@ class BallKalmanFilter:
         self.P = torch.bmm(FP, self.F.transpose(1, 2)) + self.Q
 
     def update(self, z: torch.Tensor):
-        """
-        Update step.
-        z : (num_envs, 2)  – noisy ball [px, py] in body frame
-        """
         z = z.unsqueeze(2)                              # (N, 2, 1)
         y = z - torch.bmm(self.H, self.x)
         HP = torch.bmm(self.H, self.P)
@@ -64,17 +59,14 @@ class BallKalmanFilter:
 
     @property
     def position(self) -> torch.Tensor:
-        """Returns (num_envs, 2) – KF estimated planar ball position."""
         return self.x[:, :2, 0]
 
     @property
     def velocity(self) -> torch.Tensor:
-        """Returns (num_envs, 2) – KF estimated planar ball velocity."""
         return self.x[:, 2:, 0]
 
     @property
     def uncertainty(self) -> torch.Tensor:
-        """Returns (num_envs, 2) – diagonal of position covariance block."""
         return torch.stack([self.P[:, 0, 0], self.P[:, 1, 1]], dim=1)
 
 
@@ -94,10 +86,10 @@ class Go2BalancingBallEnv:
     KD = 0.5
 
     DEFAULT_DOFS_POS = torch.tensor([
-        0.0,  0.8, -1.5,   # FL
-        0.0,  0.8, -1.5,   # FR
-        0.0,  1.0, -1.5,   # RL
-        0.0,  1.0, -1.5,   # RR
+        0.0,  0.8, -1.5,   
+        0.0,  0.8, -1.5,   
+        0.0,  1.0, -1.5,   
+        0.0,  1.0, -1.5,   
     ])
 
     ACTION_SCALE = 0.25
@@ -155,12 +147,12 @@ class Go2BalancingBallEnv:
         )
 
         #Ball
-        ball_start_pos = (0.0, 0.0, 0.40 + 0.16 + 0.075)   # on robot back
+        ball_start_pos = (0.0, 0.0, 0.40 + 0.16 + 0.075)   
         self.ball = self.scene.add_entity(
-            gs.morphs.URDF(
-                file=os.path.abspath(ball_urdf),
-                pos=ball_start_pos,
-                fixed=False,
+            gs.morphs.Sphere(
+            radius=0.075,
+            pos=ball_start_pos,
+            fixed=False,
             ),
         )
 
@@ -193,7 +185,6 @@ class Go2BalancingBallEnv:
         self.commands = torch.zeros(num_envs, 3, device=device)
 
     def _init_joint_indices(self):
-        """Cache joint DOF indices for the 12 actuated leg joints."""
         joint_names = [
             "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
             "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
@@ -241,7 +232,6 @@ class Go2BalancingBallEnv:
             self._update_viewer_camera()
 
     def _update_viewer_camera(self):
-        """Update viewer camera to follow robot and ball in env 0."""
         try:
             robot_pos = tensor_to_array(self.robot.get_pos()[0])
             lookat_z = 0.5  # between robot base (~0.4) and ball (~0.64)
