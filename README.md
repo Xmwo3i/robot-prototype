@@ -4,7 +4,7 @@ This repository contains code, configurations, and documentation for the McMaste
 
 ## Directory Overview
 
-### `rl-training-genesis/`
+#### `rl-training-genesis/`
 
 Genesis physics engine-based reinforcement learning for quadruped robots (G1, Go2).
 
